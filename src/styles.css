@@ -420,47 +420,6 @@ select {
   font-size: 13px;
 }
 
-.dropzone .samples {
-  margin-top: 26px;
-}
-
-.samples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: center;
-}
-
-.sample-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 10px 15px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-  text-align: left;
-}
-
-.sample-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: var(--shadow-2);
-  transform: translateY(-1px);
-}
-
-.sample-btn b {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.sample-btn span {
-  font-size: 11.5px;
-  color: var(--text-dim);
-}
-
 /* ------------------------------ Workspace ------------------------------ */
 .workspace {
   display: flex;

@@ -42,7 +42,6 @@ const el = {
   workspace: $('workspace'),
   dropzone: $('dropzone'),
   fileInput: $<HTMLInputElement>('file-input'),
-  samples: $('samples'),
   metrics: $('metrics'),
   chart: $('chart'),
   chartSub: $('chart-sub'),
@@ -193,32 +192,7 @@ let theme: ChartTheme = readChartTheme()
 let resizeObserver: ResizeObserver | null = null
 let smoothRaf = 0
 
-/* ------------------------------------------------------------- Samples */
-const SAMPLES = [
-  {
-    file: 'samples/ride-7km.gpx',
-    name: '滨海短途',
-    meta: '7.15 km · 21 分钟 · 含心率 / 踏频',
-  },
-  {
-    file: 'samples/ride-83km.gpx',
-    name: '长距离骑行',
-    meta: '82.55 km · 4 小时 26 分 · 含踏频',
-  },
-]
-
 /* ------------------------------------------------------------- Loading */
-async function loadSample(sample: (typeof SAMPLES)[number]): Promise<void> {
-  try {
-    const url = `${import.meta.env.BASE_URL}${sample.file}`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const text = await res.text()
-    loadTrack(parseGpx(text, sample.name, new Blob([text]).size))
-  } catch (err) {
-    toast(`示例加载失败：${errText(err)}`, true)
-  }
-}
 
 function loadFile(file: File): void {
   if (file.size > 60 * 1024 * 1024) {
@@ -938,15 +912,6 @@ function init(): void {
 
   el.themeToggle.querySelectorAll<HTMLButtonElement>('button').forEach((btn) => {
     btn.addEventListener('click', () => setThemeMode(btn.dataset.themeValue as ThemeMode))
-  })
-
-  // 示例
-  el.samples.innerHTML = SAMPLES.map(
-    (s, i) =>
-      `<button type="button" class="sample-btn" data-sample="${i}"><b>${s.name}</b><span>${s.meta}</span></button>`,
-  ).join('')
-  el.samples.querySelectorAll<HTMLButtonElement>('[data-sample]').forEach((btn) => {
-    btn.addEventListener('click', () => void loadSample(SAMPLES[Number(btn.dataset.sample)]))
   })
 
   // 文件
