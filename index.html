@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Elevation Profile · GPX 骑行海拔剖面分析</title>
+    <meta
+      name="description"
+      content="纯前端 GPX 海拔剖面分析：爬坡识别与 Strava 分级、坡度分段着色、Open-Meteo 地形海拔校准，文件全程本地解析。"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230A6CFF'/%3E%3Cpath d='M5 24 L12.5 10 L17.5 18.5 L20.5 14 L27 24 Z' fill='white'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div class="app">
+      <!-- ============================ 顶栏 ============================ -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="30" height="30">
+              <rect width="32" height="32" rx="9" fill="currentColor" opacity="0.12" />
+              <path d="M5 24 L12.5 10 L17.5 18.5 L20.5 14 L27 24 Z" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="brand-text">
+            <strong>Elevation Profile</strong>
+            <em>GPX 骑行海拔剖面分析</em>
+          </span>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="segmented segmented-sm" id="theme-toggle" role="group" aria-label="主题模式">
+            <button type="button" data-theme-value="auto">自动</button>
+            <button type="button" data-theme-value="light">浅色</button>
+            <button type="button" data-theme-value="dark">深色</button>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-open">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+              <path
+                d="M8 1.5v8m0-8L5 4.5M8 1.5l3 3M2.5 11v2A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5v-2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            加载 GPX
+          </button>
+          <input
+            type="file"
+            id="file-input"
+            accept=".gpx,.xml,application/gpx+xml,application/xml,text/xml"
+            hidden
+          />
+        </div>
+      </header>
+
+      <main class="main">
+        <!-- ========================== 空状态 ========================== -->
+        <section class="empty" id="empty-state">
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-art" aria-hidden="true">
+              <svg viewBox="0 0 120 64" width="180" height="96">
+                <defs>
+                  <linearGradient id="dzg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="currentColor" stop-opacity="0.28" />
+                    <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d="M2 56 L20 34 L32 44 L48 18 L62 36 L74 24 L92 44 L104 34 L118 56 Z"
+                  fill="url(#dzg)"
+                />
+                <path
+                  d="M2 56 L20 34 L32 44 L48 18 L62 36 L74 24 L92 44 L104 34 L118 56"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </div>
+            <h1>拖入 GPX 文件，解析骑行海拔剖面</h1>
+            <p class="dropzone-sub">
+              文件完全在浏览器本地解析，不会上传到任何服务器 · 也可直接
+              <button type="button" class="link" id="btn-open-2">选择文件…</button>
+            </p>
+            <div class="samples" id="samples"></div>
+          </div>
+        </section>
+
+        <!-- ========================== 工作区 ========================== -->
+        <section class="workspace" id="workspace" hidden>
+          <div class="metrics" id="metrics"></div>
+
+          <div class="content">
+            <div class="col-main">
+              <div class="card chart-card">
+                <div class="card-head">
+                  <div class="card-title">
+                    <h2>海拔剖面</h2>
+                    <span class="card-sub" id="chart-sub"></span>
+                  </div>
+                  <div class="card-tools">
+                    <div class="segmented segmented-sm" id="xmode-toggle" role="group" aria-label="横轴尺度">
+                      <button type="button" data-x="dist">距离</button>
+                      <button type="button" data-x="time">时间</button>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-zoom">
+                      重置缩放
+                    </button>
+                  </div>
+                </div>
+                <div class="chart" id="chart"></div>
+                <div class="chart-foot">
+                  <span id="chart-hint">滚轮缩放横轴 · 拖拽平移 · 双击图表重置</span>
+                </div>
+              </div>
+
+              <div class="card climbs-card">
+                <div class="card-head">
+                  <div class="card-title">
+                    <h2>爬坡分析</h2>
+                    <span class="card-sub" id="climbs-sub"></span>
+                  </div>
+                </div>
+                <div class="climbs" id="climbs"></div>
+              </div>
+            </div>
+
+            <!-- ======================= 控制面板 ======================= -->
+            <aside class="panel" id="panel">
+              <div class="panel-head">
+                <h2>分析设置</h2>
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-panel-reset">
+                  全部重置
+                </button>
+              </div>
+              <div class="panel-body">
+                <!-- 数据平滑 -->
+                <details class="sect" open>
+                  <summary>数据平滑</summary>
+                  <div class="sect-body">
+                    <div class="field">
+                      <label for="smooth-method">平滑方式</label>
+                      <select id="smooth-method">
+                        <option value="median-ma">中值滤波 + 滑动平均</option>
+                        <option value="median">中值滤波</option>
+                        <option value="ma">滑动平均</option>
+                        <option value="none">不平滑（原始海拔）</option>
+                      </select>
+                    </div>
+                    <label class="switch-row">
+                      <input type="checkbox" id="anomaly-toggle" checked />
+                      <span class="switch"></span>
+                      <span>修正异常海拔（坡度限幅）</span>
+                    </label>
+                    <div class="field" id="anomaly-field">
+                      <label for="anomaly-grade"
+                        >最大可信坡度 <b id="anomaly-grade-val">20 %</b></label
+                      >
+                      <input type="range" id="anomaly-grade" min="10" max="50" step="1" value="20" />
+                    </div>
+                    <div class="field">
+                      <label for="smooth-window"
+                        >海拔平滑窗口 <b id="smooth-window-val">50 m</b></label
+                      >
+                      <input
+                        type="range"
+                        id="smooth-window"
+                        min="0"
+                        max="200"
+                        step="5"
+                        value="50"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="grade-window"
+                        >坡度计算窗口 <b id="grade-window-val">50 m</b></label
+                      >
+                      <input type="range" id="grade-window" min="10" max="300" step="5" value="50" />
+                    </div>
+                    <p class="hint">
+                      坡度限幅会把气压高度计常见的「阶跃」异常摊开成合理坡道，总爬升量不变；平滑窗口越大曲线越平缓，但会钝化短促陡坡。
+                    </p>
+                  </div>
+                </details>
+
+                <!-- 海拔校准 -->
+                <details class="sect">
+                  <summary>海拔校准<span class="tag">Open-Meteo</span></summary>
+                  <div class="sect-body">
+                    <p class="hint">
+                      按经纬度反查地形海拔（Copernicus DEM GLO-90，90 m 分辨率），与码表记录对比后可随时切回原始数据。
+                    </p>
+                    <div class="field-row">
+                      <select id="cal-interval" aria-label="采样间隔">
+                        <option value="auto" selected>自适应（按轨迹长度）</option>
+                        <option value="100">每 100 m（接近 DEM 精度）</option>
+                        <option value="200">每 200 m</option>
+                        <option value="400">每 400 m</option>
+                        <option value="50">每 50 m（最细腻 · 长轨迹需等待）</option>
+                      </select>
+                      <button type="button" class="btn btn-primary btn-sm" id="btn-calibrate">
+                        获取校准海拔
+                      </button>
+                    </div>
+                    <p class="hint" id="cal-estimate"></p>
+                    <div class="progress" id="cal-progress" hidden>
+                      <div class="progress-bar" id="cal-progress-bar"></div>
+                    </div>
+                    <p class="meta" id="cal-meta"></p>
+                    <div class="field" id="cal-display-field" hidden>
+                      <label>图表显示</label>
+                      <div class="segmented" id="cal-display-toggle" role="group">
+                        <button type="button" data-cal="raw">原始</button>
+                        <button type="button" data-cal="cal">校准</button>
+                        <button type="button" data-cal="both">对比</button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                <!-- 坡度着色 -->
+                <details class="sect" open>
+                  <summary>折线标注方式</summary>
+                  <div class="sect-body">
+                    <div class="segmented" id="annotate-toggle" role="group" aria-label="标注方式">
+                      <button type="button" data-annotate="off">不标注</button>
+                      <button type="button" data-annotate="grade">按坡度</button>
+                      <button type="button" data-annotate="climb">按爬坡等级</button>
+                    </div>
+                    <p class="hint" id="annotate-hint"></p>
+
+                    <div class="stack" id="grade-block" hidden>
+                      <div class="field">
+                        <label for="band-preset">预设配色</label>
+                        <select id="band-preset">
+                          <option value="default">默认 · 陡坡高亮</option>
+                          <option value="soft">柔和</option>
+                          <option value="mono">单色渐进</option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label for="seg-minlen"
+                          >着色最短段长 <b id="seg-minlen-val">200 m</b></label
+                        >
+                        <input type="range" id="seg-minlen" min="0" max="500" step="50" value="200" />
+                      </div>
+                      <div class="bands" id="bands"></div>
+                      <div class="field-row">
+                        <button type="button" class="btn btn-ghost btn-sm" id="btn-band-add">
+                          + 添加区间
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="btn-band-reset">
+                          恢复默认
+                        </button>
+                      </div>
+                    </div>
+
+                    <details class="sub">
+                      <summary>爬坡识别参数</summary>
+                      <div class="field">
+                        <label for="p-minlen"
+                          >最小爬坡长度 <b id="p-minlen-val">300 m</b></label
+                        >
+                        <input type="range" id="p-minlen" min="100" max="3000" step="50" value="300" />
+                      </div>
+                      <div class="field">
+                        <label for="p-mingain"
+                          >最小累计爬升 <b id="p-mingain-val">20 m</b></label
+                        >
+                        <input type="range" id="p-mingain" min="5" max="200" step="5" value="20" />
+                      </div>
+                      <div class="field">
+                        <label for="p-mingrade"
+                          >最小平均坡度 <b id="p-mingrade-val">2.0 %</b></label
+                        >
+                        <input
+                          type="range"
+                          id="p-mingrade"
+                          min="1"
+                          max="8"
+                          step="0.5"
+                          value="2"
+                        />
+                      </div>
+                      <p class="hint">
+                        分级沿用 Strava 标准：坡度 ≥ 3% 且「长度(m) × 平均坡度整数%」达标时评级。
+                      </p>
+                    </details>
+                  </div>
+                </details>
+
+                <!-- 悬浮字段 -->
+                <details class="sect">
+                  <summary>悬浮气泡字段</summary>
+                  <div class="sect-body">
+                    <label class="switch-row">
+                      <input type="checkbox" checked disabled />
+                      <span class="switch"></span>
+                      <span>海拔<span class="lock">必选</span></span>
+                    </label>
+                    <label class="switch-row">
+                      <input type="checkbox" id="f-grade" checked />
+                      <span class="switch"></span>
+                      <span>坡度</span>
+                    </label>
+                    <label class="switch-row">
+                      <input type="checkbox" id="f-speed" />
+                      <span class="switch"></span>
+                      <span>速度<span class="lock" id="lock-speed" hidden>无数据</span></span>
+                    </label>
+                    <label class="switch-row">
+                      <input type="checkbox" id="f-hr" />
+                      <span class="switch"></span>
+                      <span>心率<span class="lock" id="lock-hr" hidden>无数据</span></span>
+                    </label>
+                    <label class="switch-row">
+                      <input type="checkbox" id="f-cad" />
+                      <span class="switch"></span>
+                      <span>踏频<span class="lock" id="lock-cad" hidden>无数据</span></span>
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

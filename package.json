@@ -1,0 +1,19 @@
+{
+  "name": "gpx-elevation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GPX 骑行海拔剖面分析 —— 纯静态网站",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "echarts": "^5.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

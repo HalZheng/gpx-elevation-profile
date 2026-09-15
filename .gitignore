@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+.vite
+*.local
+.DS_Store
+Thumbs.db
+
+# 根目录下的个人骑行 GPX（误拖入的原始码表数据，勿公开）
+/*.gpx
+
+# IDE / 工具
+.vscode
+.idea
+.workbuddy
