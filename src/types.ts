@@ -116,3 +116,45 @@ export interface Summary {
   hrMax: number | null
   cadMax: number | null
 }
+
+/**
+ * 沿线地名的三大类 —— 只用于配色与图例分组，
+ * 更细的「村 / 街道 / 景点 / 高校」由 `kind`（OSM 原始标签值）承载。
+ */
+export type PlaceCategory = 'admin' | 'settlement' | 'poi'
+
+/** 从 Overpass 归一化出来的候选地名 */
+export interface Place {
+  /** OSM 元素 id，仅用于去重与调试 */
+  id: number
+  name: string
+  category: PlaceCategory
+  /** OSM 原始标签值，如 village / suburb / attraction / mall */
+  kind: string
+  lat: number
+  lon: number
+  /** 带 wikipedia / wikidata 标签，视为「知名」 */
+  notable: boolean
+  /** 人口数（仅 place 类有），未知为 NaN */
+  population: number
+}
+
+/** 投影到路径上、并通过择优筛选的地名标注 */
+export interface PlaceLabel {
+  /** 归并用的完整名称 */
+  name: string
+  /** 图上显示的文本：行政后缀已剥离，起终点锚点还带「起 · / 终 ·」前缀 */
+  display: string
+  category: PlaceCategory
+  kind: string
+  /** 沿路径的里程，米（由投影点算出，不是取最近轨迹点的里程） */
+  km: number
+  /** 到路径的最近距离，米 */
+  offset: number
+  /** 投影点对应的轨迹点索引，用于取横轴坐标与海拔 */
+  idx: number
+  /** 综合得分，保留下来便于调参与排查 */
+  score: number
+  /** 起点/终点锚点。起终点一定会有标注（除非附近确实没有任何地名） */
+  anchor?: 'start' | 'end'
+}

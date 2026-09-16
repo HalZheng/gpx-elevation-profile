@@ -115,3 +115,77 @@ export function finiteRange(values: Float64Array): [number, number] {
   if (min === Infinity) return [0, 0]
   return [min, max]
 }
+
+export interface PathProjection {
+  /** 到路径（折线）的最近距离，米 */
+  offset: number
+  /** 投影点处的累积里程，米 */
+  dist: number
+  /** 投影点对应的轨迹点索引 */
+  idx: number
+}
+
+/**
+ * 把一个点投影到轨迹折线上，得到「离路径多远」和「投影点的里程」。
+ *
+ * 用于沿线的地名筛选：半径要按「点到折线」的距离算，不能按「点到采样点」算，
+ * 否则弯道内侧的地名会被高估距离而漏掉；里程也要取投影点处的，直接取最近点的里程
+ * 在稀疏采样时会偏出上百米。
+ *
+ * 实现上先用最近顶点粗筛，再在相邻几段上精算。GPS 轨迹点距通常只有几米到几十米，
+ * 最近顶点必然落在最近段附近，粗筛不会漏。
+ */
+export function projectToPath(
+  points: RawPoint[],
+  dist: Float64Array,
+  lat: number,
+  lon: number,
+): PathProjection {
+  const n = points.length
+  if (n === 0) return { offset: Infinity, dist: 0, idx: 0 }
+  if (n === 1) return { offset: haversine(points[0].lat, points[0].lon, lat, lon), dist: 0, idx: 0 }
+
+  // 以查询点为原点做局部等距圆柱投影，几公里内足够精确
+  const kx = (Math.PI / 180) * EARTH_R * Math.cos((lat * Math.PI) / 180)
+  const ky = (Math.PI / 180) * EARTH_R
+
+  let bi = 0
+  let bestD2 = Infinity
+  for (let i = 0; i < n; i++) {
+    const dx = (points[i].lon - lon) * kx
+    const dy = (points[i].lat - lat) * ky
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD2) {
+      bestD2 = d2
+      bi = i
+    }
+  }
+
+  let bestOffset = Math.sqrt(bestD2)
+  let bestDist = dist[bi]
+  let bestIdx = bi
+
+  const lo = Math.max(0, bi - 4)
+  const hi = Math.min(n - 2, bi + 4)
+  for (let i = lo; i <= hi; i++) {
+    const ax = (points[i].lon - lon) * kx
+    const ay = (points[i].lat - lat) * ky
+    const bx = (points[i + 1].lon - lon) * kx
+    const by = (points[i + 1].lat - lat) * ky
+    const vx = bx - ax
+    const vy = by - ay
+    const len2 = vx * vx + vy * vy
+    let t = len2 > 0 ? -(ax * vx + ay * vy) / len2 : 0
+    t = t < 0 ? 0 : t > 1 ? 1 : t
+    const cx = ax + vx * t
+    const cy = ay + vy * t
+    const off = Math.sqrt(cx * cx + cy * cy)
+    if (off < bestOffset) {
+      bestOffset = off
+      bestDist = dist[i] + (dist[i + 1] - dist[i]) * t
+      bestIdx = t > 0.5 ? i + 1 : i
+    }
+  }
+
+  return { offset: bestOffset, dist: bestDist, idx: bestIdx }
+}

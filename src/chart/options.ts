@@ -1,5 +1,6 @@
-import type { AnnotateMode, Climb, GradeBand } from '../types'
+import type { AnnotateMode, Climb, GradeBand, PlaceLabel } from '../types'
 import { climbColor } from '../analysis/climbs'
+import { PLACE_COLOR } from '../places/meta'
 import { hexToRgbString, rgba, type ChartTheme } from './theme'
 import type { YDomain } from './scale'
 
@@ -19,6 +20,8 @@ export interface BuildInput {
   bands: GradeBand[]
   /** annotate === 'climb' 时生效的爬坡路段 */
   climbs: Climb[]
+  /** 择优后的沿线地名标注 */
+  places: PlaceLabel[]
   zoom: { start: number; end: number }
   y: YDomain
   tooltipFormatter: (dataIndex: number) => string
@@ -43,6 +46,7 @@ export function buildChartOption(input: BuildInput): Record<string, unknown> {
     bands,
     gradeKeys,
     climbs,
+    places,
     zoom,
     y,
     tooltipFormatter,
@@ -76,10 +80,15 @@ export function buildChartOption(input: BuildInput): Record<string, unknown> {
     })
   }
 
+  // 地名标注画在最上层
+  const placeLayer = placeSeries(places, x, ele, y, theme)
+  if (placeLayer) series.push(placeLayer)
+
   return {
     animation: false,
     backgroundColor: 'transparent',
-    grid: { left: 6, right: 20, top: 30, bottom: 66, containLabel: true },
+    // top 留出 44px：地名标签浮在曲线上方，空间不够会在顶部被裁掉
+    grid: { left: 6, right: 26, top: 44, bottom: 66, containLabel: true },
     tooltip: {
       trigger: 'axis',
       confine: true,
@@ -217,6 +226,80 @@ export function buildChartOption(input: BuildInput): Record<string, unknown> {
       },
     ],
     series,
+  }
+}
+
+/* ------------------------------------------------------------ 沿线地名 */
+
+/**
+ * 地名用「散点系列」画，而不是 markPoint —— 只有系列级别的 `labelLayout`
+ * 才支持 `hideOverlap`，markPoint 不吃这个配置，密集时标签会叠成一片。
+ *
+ * 每个地名画一个小圆点落在曲线上，标签浮在点的上/下方；因为高处没有空间，
+ * 海拔落在纵轴上部 22% 的地名把标签翻到点下方。
+ */
+function placeSeries(
+  labels: PlaceLabel[],
+  x: Float64Array,
+  ele: Float64Array,
+  y: YDomain,
+  theme: ChartTheme,
+): Series | null {
+  if (labels.length === 0) return null
+  const span = Math.max(1e-6, y.max - y.min)
+  const surfaceRgb = hexToRgbString(theme.surface)
+  const x0 = x[0]
+  const xSpan = x[x.length - 1] - x0 || 1
+
+  const data = labels.map((p) => {
+    const color = PLACE_COLOR[p.category]
+    const pointX = x[p.idx]
+    const high = (ele[p.idx] - y.min) / span > 0.78
+    // 贴着网格左右边缘的地名，标签往网格内倒，否则胶囊会被裁掉一半
+    const t = (pointX - x0) / xSpan
+    const align = t < 0.02 ? 'left' : t > 0.98 ? 'right' : 'center'
+    const isAnchor = p.anchor !== undefined
+    return {
+      name: p.display,
+      value: [pointX, ele[p.idx]],
+      // 点击放大时用得上：dataIndex 与轨迹点索引不是一回事
+      idx: p.idx,
+      itemStyle: {
+        color,
+        borderColor: theme.surface,
+        borderWidth: isAnchor ? 1.8 : 1.4,
+      },
+      label: {
+        position: high ? 'bottom' : 'top',
+        distance: 5,
+        align,
+        formatter: p.display,
+        color: theme.text,
+        fontSize: 11,
+        fontWeight: 600,
+        padding: [3, 6],
+        borderRadius: 5,
+        // 胶囊底：地名的背后常是渐变填充，不加底会看不清
+        backgroundColor: rgba(surfaceRgb, theme.isDark ? 0.78 : 0.88),
+        borderColor: rgba(hexToRgbString(color), isAnchor ? 0.9 : 0.55),
+        borderWidth: 1,
+      },
+    }
+  })
+
+  return {
+    name: 'places',
+    type: 'scatter',
+    data,
+    symbolSize: 5,
+    z: 9,
+    animation: false,
+    label: { show: true },
+    // hideOverlap 负责「实在挤不下就隐藏」，moveOverlap:'shiftY' 让它先尝试上下错位——
+    // 否则只会看到一个孤零零的圆点却没有名字
+    labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+    emphasis: { disabled: true },
+    tooltip: { show: false },
   }
 }
 

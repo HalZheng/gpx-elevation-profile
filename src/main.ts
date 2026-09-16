@@ -18,12 +18,17 @@ import { computeSummary } from './analysis/stats'
 import { DEFAULT_CLIMB_PARAMS, categoryLabel, climbColor, detectClimbs } from './analysis/climbs'
 import { DEFAULT_BAND_PRESET, bandColorFor, normalizeBands, presetBands } from './analysis/bands'
 import { classifyByGrade, countSegments } from './analysis/segments'
+import { fetchPlaces, type PlaceFetchResult } from './places/overpass'
+import { displayKind, PLACE_COLOR } from './places/meta'
+import { selectPlaceLabels, type PlaceSelection } from './places/select'
 import * as fmt from './format'
 import type {
   AnnotateMode,
   Climb,
   ClimbParams,
   GradeBand,
+  Place,
+  PlaceLabel,
   Summary,
   Track,
   TrackSeries,
@@ -45,6 +50,7 @@ const el = {
   metrics: $('metrics'),
   chart: $('chart'),
   chartSub: $('chart-sub'),
+  chartHint: $('chart-hint'),
   climbs: $('climbs'),
   climbsSub: $('climbs-sub'),
   xmodeToggle: $('xmode-toggle'),
@@ -90,6 +96,16 @@ const el = {
   lockSpeed: $('lock-speed'),
   lockHr: $('lock-hr'),
   lockCad: $('lock-cad'),
+  // 地名
+  placesToggle: $<HTMLInputElement>('places-toggle'),
+  placesMeta: $('places-meta'),
+  placesRetry: $<HTMLButtonElement>('places-retry'),
+  placeRadius: $<HTMLInputElement>('place-radius'),
+  placeRadiusVal: $('place-radius-val'),
+  placeSpacing: $<HTMLInputElement>('place-spacing'),
+  placeSpacingVal: $('place-spacing-val'),
+  placeCount: $<HTMLInputElement>('place-count'),
+  placeCountVal: $('place-count-val'),
   btnResetZoom: $<HTMLButtonElement>('btn-reset-zoom'),
   btnPanelReset: $<HTMLButtonElement>('btn-panel-reset'),
   btnOpen: $<HTMLButtonElement>('btn-open'),
@@ -134,6 +150,25 @@ interface State {
 
   climbParams: ClimbParams
 
+  /** 沿线地名：是否显示 */
+  placesEnabled: boolean
+  /** 基础纳入半径，米 */
+  placeRadius: number
+  /** 沿路径最小标注间距，米 */
+  placeSpacing: number
+  /** 最多标注数量 */
+  placeCount: number
+  /** 当前轨迹的候选地名池（一次请求的结果） */
+  places: Place[]
+  /** 择优后实际画在图上的地名 */
+  placeLabels: PlaceLabel[]
+  placeSelection: PlaceSelection | null
+  placesLoading: boolean
+  /** 重试进度，用于「第 2/3 次尝试」这类提示 */
+  placeAttempt: { attempt: number; total: number; endpoint: string } | null
+  placesError: string | null
+  placeFetch: PlaceFetchResult | null
+
   fields: TooltipFields
   zoom: { start: number; end: number }
 
@@ -173,6 +208,18 @@ const state: State = {
   minSegLength: 200,
 
   climbParams: { ...DEFAULT_CLIMB_PARAMS },
+
+  placesEnabled: true,
+  placeRadius: 800,
+  placeSpacing: 2000,
+  placeCount: 12,
+  places: [],
+  placeLabels: [],
+  placeSelection: null,
+  placesLoading: false,
+  placeAttempt: null,
+  placesError: null,
+  placeFetch: null,
 
   fields: { grade: true, speed: false, hr: false, cad: false },
   zoom: { start: 0, end: 100 },
@@ -260,6 +307,10 @@ function loadTrack(track: Track): void {
     syncSegMinlenUI()
     rebuild()
   })
+
+  // 地名：先按新轨迹复位参数并清空旧标注，再异步取候选（不阻塞首帧）
+  resetPlaces()
+  void loadPlaces(track)
 }
 
 /** 用相邻有效值填平原数组中的 NaN */
@@ -360,6 +411,12 @@ function ensureChart(): EChartsInstance {
   if (chart) return chart
   chart = echarts.init(el.chart, undefined, { renderer: 'canvas' })
   chart.on('dataZoom', onDataZoom)
+  chart.on('click', (params) => {
+    const p = params as { componentType?: string; seriesName?: string; data?: { idx?: number } }
+    if (p.componentType !== 'series' || p.seriesName !== 'places') return
+    const idx = p.data?.idx
+    if (typeof idx === 'number') zoomToPlace(idx)
+  })
   chart.getZr().on('dblclick', () => resetZoom())
   if (typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => chart?.resize())
@@ -386,6 +443,7 @@ function renderChart(full: boolean): void {
     annotate: state.annotate,
     bands: state.bands,
     climbs: state.climbs,
+    places: state.placeLabels,
     zoom: state.zoom,
     y,
     tooltipFormatter: tooltipHTML,
@@ -459,6 +517,30 @@ function climbAt(idx: number): Climb | null {
   return null
 }
 
+/**
+ * 悬浮点附近的已标注地名。判定用**屏幕像素距离**而不是沿路径的距离：
+ * 在 83 km 的尺度上 80 m 还不到一个像素，用户根本扫不到；
+ * 换成 14 px 才符合「鼠标靠近那个标签就看到说明」的直觉。
+ */
+function nearestPlaceLabel(idx: number): PlaceLabel | null {
+  if (!chart || state.placeLabels.length === 0) return null
+  const x = currentX()
+  const probe = chart.convertToPixel({ xAxisIndex: 0 }, x[idx])
+  if (typeof probe !== 'number') return null
+  let best: PlaceLabel | null = null
+  let bestGap = Infinity
+  for (const label of state.placeLabels) {
+    const at = chart.convertToPixel({ xAxisIndex: 0 }, x[label.idx])
+    if (typeof at !== 'number') continue
+    const gap = Math.abs(at - probe)
+    if (gap <= 14 && gap < bestGap) {
+      bestGap = gap
+      best = label
+    }
+  }
+  return best
+}
+
 function tooltipHTML(idx: number): string {
   const series = state.series
   const track = state.track
@@ -511,6 +593,13 @@ function tooltipHTML(idx: number): string {
     const level = climb.category ? categoryLabel(climb.category) : '未分级'
     notes.push(
       `<div class="ep-note">处于爬坡路段 · ${level} · 平均 ${climb.avgGrade.toFixed(1)}%</div>`,
+    )
+  }
+  // 悬浮点落在某个已标注地名附近时补一行，顺带说明「离路线多远」
+  const near = nearestPlaceLabel(idx)
+  if (near) {
+    notes.push(
+      `<div class="ep-note"><i class="ep-dot" style="display:inline-block;vertical-align:middle;background:${PLACE_COLOR[near.category]}"></i> ${near.display} · ${displayKind(near.kind, near.name)} · 离路线 ${Math.round(near.offset)} m</div>`,
     )
   }
   if (state.calib && state.calDisplay !== 'raw') {
@@ -826,6 +915,203 @@ function setAnnotate(mode: AnnotateMode): void {
   else syncAnnotateUI()
 }
 
+/* -------------------------------------------------------------- 地名 */
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v))
+}
+
+/** 半径与最小间距的默认值按总距离自适应：长轨迹给更大范围，短途收紧 */
+function defaultPlaceParams(totalMeters: number): { radius: number; spacing: number } {
+  return {
+    radius: clamp(Math.round((totalMeters * 0.01) / 100) * 100, 300, 2000),
+    spacing: clamp(Math.round((totalMeters * 0.04) / 250) * 250, 1000, 6000),
+  }
+}
+
+/** 换轨迹：清空旧地名与旧标注，参数回到自适应默认值 */
+function resetPlaces(): void {
+  const total = state.series ? state.series.dist[state.series.dist.length - 1] : 0
+  const d = defaultPlaceParams(total)
+  state.places = []
+  state.placeLabels = []
+  state.placeSelection = null
+  state.placeFetch = null
+  state.placesError = null
+  state.placesLoading = false
+  state.placeAttempt = null
+  state.placeRadius = d.radius
+  state.placeSpacing = d.spacing
+  syncPlaceUI()
+  renderPlacesMeta()
+  if (state.track) renderChart(true)
+}
+
+/**
+ * 取回候选地名。不阻塞首帧：loadTrack 里 fire-and-forget 调用，
+ * 返回后若轨迹已换掉就丢弃结果（用 track 引用比对，而不是索引）。
+ */
+async function loadPlaces(track: Track): Promise<void> {
+  if (!state.placesEnabled) return
+  state.placesError = null
+  state.placesLoading = true
+  state.placeAttempt = null
+  renderPlacesMeta()
+  try {
+    const res = await fetchPlaces(track.points, (info) => {
+      if (state.track !== track) return
+      state.placeAttempt = info
+      renderPlacesMeta()
+    })
+    if (state.track !== track) return
+    state.placeFetch = res
+    state.places = res.places
+  } catch (err) {
+    if (state.track === track) state.placesError = errText(err)
+  }
+  if (state.track !== track) return
+  state.placesLoading = false
+  state.placeAttempt = null
+  updatePlaceLabels()
+}
+
+/**
+ * 用当前半径/间距/数量重新择优。这一步纯本地，改参数不会重新联网。
+ */
+function updatePlaceLabels(): void {
+  const track = state.track
+  const series = state.series
+  if (!track || !series) return
+
+  if (!state.placesEnabled || state.places.length === 0) {
+    state.placeLabels = []
+    state.placeSelection = null
+  } else {
+    const sel = selectPlaceLabels(state.places, track.points, series.dist, {
+      radius: state.placeRadius,
+      minSpacing: state.placeSpacing,
+      maxCount: state.placeCount,
+    })
+    state.placeLabels = sel.labels
+    state.placeSelection = sel
+  }
+
+  el.chartHint.textContent =
+    state.placeLabels.length > 0
+      ? '滚轮缩放横轴 · 拖拽平移 · 双击重置 · 点击地名放大到该位置'
+      : '滚轮缩放横轴 · 拖拽平移 · 双击图表重置'
+
+  renderPlacesMeta()
+  renderChart(true)
+}
+
+function renderPlacesMeta(): void {
+  // 只有失败时才露出重试入口：Overpass 是公共实例，偶发 504 不该让功能一直瘫着
+  el.placesRetry.hidden = !state.placesError || state.placesLoading
+  if (state.placesLoading) {
+    el.placesMeta.className = 'meta'
+    const a = state.placeAttempt
+    el.placesMeta.textContent = a
+      ? `正在从 OpenStreetMap 取回周边地名…（第 ${a.attempt}/${a.total} 次尝试 · ${a.endpoint}）`
+      : '正在从 OpenStreetMap 取回周边地名…'
+    return
+  }
+  if (state.placesError) {
+    el.placesMeta.className = 'meta is-err'
+    // 「完全没响应」和「服务端报错」要分开说：前者几乎都是本机网络/代理的问题，
+    // 用户改网络设置就能解决；后者只能等公共实例缓过来
+    const hint = /无响应/.test(state.placesError)
+      ? '（多次尝试都没拿到任何响应，通常是本机代理 / VPN 未正常工作或网络受限，恢复后点「重新获取」）'
+      : ''
+    el.placesMeta.textContent = `获取失败：${state.placesError}${hint}`
+    return
+  }
+  if (!state.placesEnabled) {
+    el.placesMeta.className = 'meta'
+    el.placesMeta.textContent = '已关闭显示（候选数据仍在，打开即可立刻标注）'
+    return
+  }
+  const fetch = state.placeFetch
+  if (!fetch) {
+    el.placesMeta.className = 'meta'
+    el.placesMeta.textContent = '尚未获取'
+    return
+  }
+  if (state.places.length === 0) {
+    el.placesMeta.className = 'meta'
+    el.placesMeta.textContent = '该范围内没找到带名字的地名，可调大标注半径'
+    return
+  }
+
+  const parts = [`候选 ${fetch.rawCount.toLocaleString('zh-CN')} 个`]
+  const sel = state.placeSelection
+  if (sel) {
+    parts.push(`符合半径 ${sel.eligible}`)
+    if (sel.merged !== sel.eligible) parts.push(`同名归并后 ${sel.merged}`)
+    parts.push(`实际标注 ${state.placeLabels.length}`)
+    const missing: string[] = []
+    if (!sel.anchors.start) missing.push('起点')
+    if (!sel.anchors.end) missing.push('终点')
+    if (missing.length > 0) parts.push(`${missing.join('、')}附近没找到地名`)
+  }
+  parts.push(
+    fetch.source === 'network'
+      ? `${fetch.endpoint} · ${fetch.elapsedMs} ms`
+      : fetch.source === 'store'
+        ? '本地缓存（7 天内免请求）'
+        : fetch.source === 'reuse'
+          ? '复用更大范围的本地缓存'
+          : '本次会话缓存',
+  )
+  el.placesMeta.className = 'meta is-ok'
+  el.placesMeta.textContent = parts.join(' · ')
+}
+
+function syncPlaceUI(): void {
+  el.placesToggle.checked = state.placesEnabled
+  el.placeRadius.value = String(state.placeRadius)
+  el.placeRadiusVal.textContent = `${state.placeRadius} m`
+  el.placeSpacing.value = String(state.placeSpacing)
+  el.placeSpacingVal.textContent = `${(state.placeSpacing / 1000).toFixed(1)} km`
+  el.placeCount.value = String(state.placeCount)
+  el.placeCountVal.textContent = String(state.placeCount)
+}
+
+let placeRaf = 0
+function debouncedPlaceUpdate(): void {
+  window.cancelAnimationFrame(placeRaf)
+  placeRaf = window.requestAnimationFrame(() => updatePlaceLabels())
+}
+
+function nearestIndexByDist(dist: Float64Array, target: number): number {
+  let lo = 0
+  let hi = dist.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (dist[mid] < target) lo = mid + 1
+    else hi = mid
+  }
+  if (lo > 0 && Math.abs(dist[lo - 1] - target) < Math.abs(dist[lo] - target)) return lo - 1
+  return lo
+}
+
+/** 点击地名：把横轴放大到该地名前后各一小段 */
+function zoomToPlace(idx: number): void {
+  const series = state.series
+  if (!chart || !series) return
+  const x = currentX()
+  const total = series.dist[series.dist.length - 1]
+  const span = x[x.length - 1] - x[0] || 1
+  const half = Math.max(total * 0.04, 1000)
+  const center = series.dist[idx]
+  const i0 = nearestIndexByDist(series.dist, Math.max(0, center - half))
+  const i1 = nearestIndexByDist(series.dist, Math.min(total, center + half))
+  const start = Math.max(0, ((x[i0] - x[0]) / span) * 100)
+  const end = Math.min(100, ((x[i1] - x[0]) / span) * 100)
+  if (!(end > start)) return
+  chart.dispatchAction({ type: 'dataZoom', start, end })
+}
+
 /* ---------------------------------------------------------- Capability */
 function applyCapabilities(): void {
   const track = state.track
@@ -1030,6 +1316,34 @@ function init(): void {
     debouncedRebuild()
   })
 
+  // 沿线地名
+  el.placesToggle.addEventListener('change', () => {
+    state.placesEnabled = el.placesToggle.checked
+    updatePlaceLabels()
+    // 候选还没取过（例如载入时开关是关的）就补一次请求
+    if (state.placesEnabled && state.places.length === 0 && state.track && !state.placesLoading) {
+      void loadPlaces(state.track)
+    }
+  })
+  el.placeRadius.addEventListener('input', () => {
+    state.placeRadius = Number(el.placeRadius.value)
+    el.placeRadiusVal.textContent = `${state.placeRadius} m`
+    debouncedPlaceUpdate()
+  })
+  el.placeSpacing.addEventListener('input', () => {
+    state.placeSpacing = Number(el.placeSpacing.value)
+    el.placeSpacingVal.textContent = `${(state.placeSpacing / 1000).toFixed(1)} km`
+    debouncedPlaceUpdate()
+  })
+  el.placeCount.addEventListener('input', () => {
+    state.placeCount = Number(el.placeCount.value)
+    el.placeCountVal.textContent = String(state.placeCount)
+    debouncedPlaceUpdate()
+  })
+  el.placesRetry.addEventListener('click', () => {
+    if (state.track && !state.placesLoading) void loadPlaces(state.track)
+  })
+
   const bindRange = (
     input: HTMLInputElement,
     output: HTMLElement,
@@ -1074,6 +1388,7 @@ function init(): void {
 
   renderBands()
   syncAnnotateUI()
+  syncPlaceUI()
 }
 
 function resetSettings(): void {
@@ -1087,6 +1402,15 @@ function resetSettings(): void {
     ? defaultMinSegLength(state.series.dist[state.series.dist.length - 1])
     : 200
   state.climbParams = { ...DEFAULT_CLIMB_PARAMS }
+  {
+    const d = defaultPlaceParams(
+      state.series ? state.series.dist[state.series.dist.length - 1] : 0,
+    )
+    state.placeRadius = d.radius
+    state.placeSpacing = d.spacing
+    state.placeCount = 12
+    state.placesEnabled = true
+  }
   state.fields = { grade: true, speed: false, hr: false, cad: false }
   state.calDisplay = state.calib ? 'cal' : 'raw'
 
@@ -1114,12 +1438,14 @@ function resetSettings(): void {
   if (!el.fCad.disabled) el.fCad.checked = false
 
   renderBands()
+  syncPlaceUI()
   if (state.track) {
     applyCapabilities()
     el.calDisplayToggle.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
       b.setAttribute('aria-pressed', String(b.dataset.cal === state.calDisplay))
     })
     rebuild()
+    updatePlaceLabels()
   }
   toast('已恢复默认设置')
 }
@@ -1134,4 +1460,5 @@ init()
   getChart: () => chart,
   resetZoom,
   rebuild,
+  updatePlaceLabels,
 }

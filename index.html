@@ -295,6 +295,65 @@
                   </div>
                 </details>
 
+                <!-- 沿线地名 -->
+                <details class="sect">
+                  <summary>沿线地名<span class="tag">OpenStreetMap</span></summary>
+                  <div class="sect-body">
+                    <p class="hint">
+                      载入轨迹后自动取回周边的区县、街道村庄、景点高校与商圈，按「离路线有多近」筛选后标在图上。地名取自
+                      OpenStreetMap，一次请求取全量候选，之后的筛选全在本地算。
+                    </p>
+                    <p class="meta" id="places-meta"></p>
+                    <button type="button" class="btn btn-ghost btn-sm" id="places-retry" hidden>
+                      重新获取
+                    </button>
+                    <label class="switch-row">
+                      <input type="checkbox" id="places-toggle" checked />
+                      <span class="switch"></span>
+                      <span>在图上显示地名</span>
+                    </label>
+                    <div class="field">
+                      <label for="place-radius"
+                        >标注半径 <b id="place-radius-val">800 m</b></label
+                      >
+                      <input
+                        type="range"
+                        id="place-radius"
+                        min="200"
+                        max="5000"
+                        step="100"
+                        value="800"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="place-spacing"
+                        >最小标注间距 <b id="place-spacing-val">2.0 km</b></label
+                      >
+                      <input
+                        type="range"
+                        id="place-spacing"
+                        min="500"
+                        max="10000"
+                        step="250"
+                        value="2000"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="place-count">最多标注数 <b id="place-count-val">12</b></label>
+                      <input type="range" id="place-count" min="3" max="30" step="1" value="12" />
+                    </div>
+                    <p class="hint">
+                      区县/市按 6–8 倍半径纳入（行政中心往往离路线很远，但你确实穿过了它），
+                      村庄、街道、景点、高校、商场按 1–1.6 倍；<b>起点与终点附近再放宽一倍兜底</b>，
+                      这一带没有更具体的地名时，就用小区名、商圈名补上。
+                      城市街道（「凌水街道」「南关岭街道」）本身就是当地人惯用的地名，权重不做回避，
+                      只有更著名的地标（景点、高校）才会自然排在它前面。
+                      同名地名先归并（「大连理工大学」的东西南门只留一个），再按「类别 + 离路线远近 + 知名度」
+                      打分，间距不足的只保留得分高的；起点和终点各钉一个，不会被后面的高分地名挤掉。
+                    </p>
+                  </div>
+                </details>
+
                 <!-- 悬浮字段 -->
                 <details class="sect">
                   <summary>悬浮气泡字段</summary>
