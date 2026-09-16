@@ -47,6 +47,11 @@ export function parseGpx(text: string, fallbackName: string, bytes: number): Tra
       : 0
   const hasTime = withTime >= points.length * 0.8 && timeSpan > 0
 
+  // 路线规划类文件（rte 导出等）常完全没有 <ele>：此时坡度/爬升分析全部不可用，
+  // 必须让调用方能检测出来并提示，而不是画一条 0 m 平线让人困惑
+  const eleCount = points.reduce((n, p) => n + (isFinite(p.ele) ? 1 : 0), 0)
+  const hasEle = eleCount >= points.length * 0.5
+
   const hrCount = points.reduce((n, p) => n + (isFinite(p.hr) ? 1 : 0), 0)
   const cadCount = points.reduce((n, p) => n + (isFinite(p.cad) ? 1 : 0), 0)
   const hasHr = hrCount >= points.length * 0.5
@@ -56,6 +61,7 @@ export function parseGpx(text: string, fallbackName: string, bytes: number): Tra
     name: readTrackName(doc) || fallbackName,
     points,
     segStarts,
+    hasEle,
     hasTime,
     hasHr,
     hasCad,

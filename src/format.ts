@@ -62,3 +62,13 @@ export function fmtInt(n: number): string {
   if (!isFinite(n)) return '—'
   return Math.round(n).toLocaleString('zh-CN')
 }
+
+/** 转义 HTML 特殊字符。外部来源的文本（如 OSM 地名）进 innerHTML 前必须走这里 */
+export function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}

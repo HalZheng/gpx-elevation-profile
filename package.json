@@ -1,8 +1,8 @@
 {
   "name": "gpx-elevation",
-  "private": true,
   "version": "1.0.0",
   "type": "module",
+  "license": "MIT",
   "description": "GPX 骑行海拔剖面分析 —— 纯静态网站",
   "scripts": {
     "dev": "vite",

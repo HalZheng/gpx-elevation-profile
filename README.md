@@ -162,3 +162,7 @@ continuous 均无效，且显式 `lineStyle.color` 会直接覆盖它）。因�
 底层为 Copernicus DEM GLO-90（ESA）。
 沿线地名数据来自 [OpenStreetMap](https://www.openstreetmap.org/)（Overpass API），
 © OpenStreetMap 贡献者，遵循 ODbL 许可。
+
+## 许可
+
+本仓库代码以 [MIT](LICENSE) 许可发布。

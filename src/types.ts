@@ -16,6 +16,8 @@ export interface Track {
   points: RawPoint[]
   /** 每个 trkseg 的起始点索引，用于计算距离时跳过段间跳变 */
   segStarts: number[]
+  /** 是否含有效海拔（路线规划类文件可能没有 <ele>） */
+  hasEle: boolean
   hasTime: boolean
   hasHr: boolean
   hasCad: boolean

@@ -260,6 +260,10 @@ function loadFile(file: File): void {
 
 function loadTrack(track: Track): void {
   const n = track.points.length
+  // 没有海拔的 GPX（路线规划导出等）：坡度/爬升全不可用，但 Open-Meteo 校准可以按地形补齐
+  if (!track.hasEle) {
+    toast('该文件不含海拔数据，坡度与爬坡分析不可用 · 可点右侧「获取校准海拔」按地形补齐', true)
+  }
   const dist = computeDistance(track.points, track.segStarts)
   const time = computeElapsed(track.points)
   const eleRaw = new Float64Array(n)
@@ -598,8 +602,9 @@ function tooltipHTML(idx: number): string {
   // 悬浮点落在某个已标注地名附近时补一行，顺带说明「离路线多远」
   const near = nearestPlaceLabel(idx)
   if (near) {
+    // 地名来自 OSM 开放数据，进 innerHTML 前必须转义
     notes.push(
-      `<div class="ep-note"><i class="ep-dot" style="display:inline-block;vertical-align:middle;background:${PLACE_COLOR[near.category]}"></i> ${near.display} · ${displayKind(near.kind, near.name)} · 离路线 ${Math.round(near.offset)} m</div>`,
+      `<div class="ep-note"><i class="ep-dot" style="display:inline-block;vertical-align:middle;background:${PLACE_COLOR[near.category]}"></i> ${fmt.escapeHtml(near.display)} · ${displayKind(near.kind, near.name)} · 离路线 ${Math.round(near.offset)} m</div>`,
     )
   }
   if (state.calib && state.calDisplay !== 'raw') {
@@ -1395,6 +1400,8 @@ function resetSettings(): void {
   state.smoothMethod = 'median-ma'
   state.smoothWindow = 50
   state.gradeWindow = 50
+  state.anomalyFix = true
+  state.anomalyMaxGrade = 20
   state.annotate = 'off'
   state.bandPreset = DEFAULT_BAND_PRESET
   state.bands = presetBands(DEFAULT_BAND_PRESET)
