@@ -107,6 +107,7 @@ const el = {
   placeCount: $<HTMLInputElement>('place-count'),
   placeCountVal: $('place-count-val'),
   btnResetZoom: $<HTMLButtonElement>('btn-reset-zoom'),
+  btnExport: $<HTMLButtonElement>('btn-export-png'),
   btnPanelReset: $<HTMLButtonElement>('btn-panel-reset'),
   btnOpen: $<HTMLButtonElement>('btn-open'),
   btnOpen2: $<HTMLButtonElement>('btn-open-2'),
@@ -129,6 +130,8 @@ interface State {
   xDist: Float64Array | null
   xTime: Float64Array | null
   xMode: XMode
+  /** 本次轨迹被压缩掉的暂停总秒数 */
+  pausedTime: number
 
   smoothMethod: SmoothMethod
   smoothWindow: number
@@ -191,6 +194,7 @@ const state: State = {
   xDist: null,
   xTime: null,
   xMode: 'dist',
+  pausedTime: 0,
 
   smoothMethod: 'median-ma',
   smoothWindow: 50,
@@ -265,7 +269,7 @@ function loadTrack(track: Track): void {
     toast('该文件不含海拔数据，坡度与爬坡分析不可用 · 可点右侧「获取校准海拔」按地形补齐', true)
   }
   const dist = computeDistance(track.points, track.segStarts)
-  const time = computeElapsed(track.points)
+  const elapsed = computeElapsed(track.points)
   const eleRaw = new Float64Array(n)
   const hr = new Float64Array(n)
   const cad = new Float64Array(n)
@@ -278,12 +282,15 @@ function loadTrack(track: Track): void {
   // 极少数缺失海拔：用前后有效值线性填补
   fillGaps(eleRaw)
 
-  const speed = track.hasTime ? rollingSpeed(dist, time, 5) : new Float64Array(n).fill(NaN)
+  // 速度按未压缩的原始时间算：暂停期间速度应趋近 0，
+  // 用压缩时间会把 GPS 漂移的几米除成速度尖峰
+  const speed = track.hasTime ? rollingSpeed(dist, elapsed.rawTime, 5) : new Float64Array(n).fill(NaN)
 
   state.track = track
-  state.series = { dist, time, eleRaw, eleCal: null, speed, hr, cad }
+  state.series = { dist, time: elapsed.time, eleRaw, eleCal: null, speed, hr, cad }
   state.xDist = dist.map((v) => v / 1000)
-  state.xTime = time.map((v) => v / 60)
+  state.xTime = elapsed.time.map((v) => v / 60)
+  state.pausedTime = elapsed.pausedTime
   state.calib = null
   state.calDisplay = 'raw'
   state.zoom = { start: 0, end: 100 }
@@ -483,6 +490,32 @@ function resetZoom(): void {
   chart.setOption({ yAxis: { min: y.min, max: y.max, interval: y.interval } } as never)
 }
 
+/**
+ * 导出当前剖面为 PNG：2 倍分辨率适配高分屏，背景取卡片底色，
+ * 排除缩放滑杆让分享图更干净。
+ */
+function exportPng(): void {
+  if (!chart) return
+  try {
+    const url = chart.getDataURL({
+      type: 'png',
+      pixelRatio: 2,
+      backgroundColor: theme.surface,
+      excludeComponents: ['dataZoom'],
+    })
+    const name =
+      (state.track?.name ?? 'elevation-profile')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .trim() || 'elevation-profile'
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${name}.png`
+    a.click()
+  } catch (err) {
+    toast(`导出失败：${errText(err)}`, true)
+  }
+}
+
 function zoomToClimb(climb: Climb): void {
   if (!chart || !state.series) return
   const x = currentX()
@@ -624,14 +657,14 @@ function renderMetrics(): void {
   }
 
   const cards: string[] = []
-  const card = (label: string, value: string, accent = false): void => {
+  const card = (label: string, value: string, accent = false, title = ''): void => {
     cards.push(
-      `<div class="metric${accent ? ' is-accent' : ''}"><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`,
+      `<div class="metric${accent ? ' is-accent' : ''}"${title ? ` title="${title}"` : ''}><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`,
     )
   }
 
   card('距离', `${fmt.fmtDistance(summary.distance)}<small>km</small>`, true)
-  card('累计爬升', `${fmt.fmtInt(summary.gain)}<small>m</small>`)
+  card('累计爬升', `${fmt.fmtInt(summary.gain)}<small>m</small>`, false, '基于平滑后的海拔计算，调整平滑窗口会改变该值')
   card('平均坡度', `${fmt.fmtNum(summary.avgGrade, 1)}<small>%</small>`)
   card('最大坡度', `${fmt.fmtNum(summary.maxGrade, 1)}<small>%</small>`)
   card('最高海拔', `${fmt.fmtInt(summary.maxEle)}<small>m</small>`)
@@ -649,6 +682,7 @@ function renderMetrics(): void {
   el.metrics.innerHTML = cards.join('')
 
   const bits = [`${track.points.length.toLocaleString('zh-CN')} 个轨迹点`]
+  if (state.pausedTime >= 60) bits.push(`已扣除暂停 ${fmt.fmtDuration(state.pausedTime)}`)
   if (state.calib && state.calDisplay !== 'raw') bits.push('已校准海拔')
   if (state.annotate === 'grade') bits.push('按坡度着色')
   else if (state.annotate === 'climb') bits.push('按爬坡等级着色')
@@ -1387,8 +1421,9 @@ function init(): void {
   el.fHr.addEventListener('change', () => (state.fields.hr = el.fHr.checked))
   el.fCad.addEventListener('change', () => (state.fields.cad = el.fCad.checked))
 
-  // 缩放
+  // 缩放与导出
   el.btnResetZoom.addEventListener('click', () => resetZoom())
+  el.btnExport.addEventListener('click', exportPng)
   el.btnPanelReset.addEventListener('click', () => resetSettings())
 
   renderBands()

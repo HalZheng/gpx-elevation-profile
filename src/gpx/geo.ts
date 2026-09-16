@@ -32,18 +32,89 @@ export function computeDistance(points: RawPoint[], segStarts: number[]): Float6
   return out
 }
 
-/** 相对起点的秒数，缺失为 NaN */
-export function computeElapsed(points: RawPoint[]): Float64Array {
+/** 相对起点的时间，暂停段已压缩 */
+export interface ElapsedResult {
+  /** 压缩暂停后的相对时间（秒）：时间轴、骑行时长、爬坡用时都用它 */
+  time: Float64Array
+  /**
+   * 未压缩的原始相对时间（秒）：速度计算专用——暂停期间速度应趋近 0，
+   * 若用压缩时间，GPS 漂移的几米会被近零的时间差除成速度尖峰
+   */
+  rawTime: Float64Array
+  /** 被压缩掉的暂停总秒数 */
+  pausedTime: number
+}
+
+/** 暂停判定的最短持续秒数：更短的停留（等一个灯）仍计入骑行时长 */
+const PAUSE_MIN_SPAN_S = 15
+/** 大时间间隔下视为「没挪窝」的位移上限（米）：容纳 GPS 漂移 */
+const PAUSE_DRIFT_M = 15
+/** 常规记录间隔下的原地步速阈值（m/s ≈ 1.8 km/h）：低于它视为没在骑 */
+const STILL_SPEED_MPS = 0.5
+
+/**
+ * 相对起点的时间（秒），停留段被压缩。
+ *
+ * 判定按「步」进行：相邻点时间差 > 15 s 且位移 < 15 m（开了自动暂停的码表
+ * 会直接产生这种大间隔），或常规间隔下步速 < 1.8 km/h（没开自动暂停、
+ * 原地仍在每秒记录）。连续的原地步聚成 run，真实时长 ≥ 15 s 的 run 在
+ * 时间轴上整体压平——骑行时长、平均速度、爬坡用时因此都是「移动时间」
+ * 口径；搬运转移（间隔大且位移大）不会误压缩，仍保持原样。
+ */
+export function computeElapsed(points: RawPoint[]): ElapsedResult {
   const n = points.length
-  const out = new Float64Array(n).fill(NaN)
+  const rawTime = new Float64Array(n).fill(NaN)
   let base = NaN
   for (let i = 0; i < n; i++) {
     const t = points[i].time
     if (!isFinite(t)) continue
     if (!isFinite(base)) base = t
-    out[i] = (t - base) / 1000
+    rawTime[i] = (t - base) / 1000
   }
-  return out
+
+  const still = new Uint8Array(n)
+  for (let i = 1; i < n; i++) {
+    if (!isFinite(rawTime[i]) || !isFinite(rawTime[i - 1])) continue
+    const dt = rawTime[i] - rawTime[i - 1]
+    if (dt <= 0) continue
+    const disp = haversine(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon)
+    still[i] =
+      dt > PAUSE_MIN_SPAN_S
+        ? disp < PAUSE_DRIFT_M
+          ? 1
+          : 0
+        : disp / dt < STILL_SPEED_MPS
+          ? 1
+          : 0
+  }
+
+  const time = new Float64Array(n).fill(NaN)
+  let pausedTime = 0
+  let i = 0
+  while (i < n) {
+    if (!isFinite(rawTime[i])) {
+      i++
+      continue
+    }
+    time[i] = rawTime[i] - pausedTime
+    // 聚出从 i+1 开始的连续原地 run（步 i+1 .. j-1 都是 still）
+    let j = i + 1
+    while (j < n && still[j]) j++
+    if (j > i + 1) {
+      const span = rawTime[j - 1] - rawTime[i]
+      if (span >= PAUSE_MIN_SPAN_S) {
+        for (let k = i + 1; k < j; k++) time[k] = time[i]
+        pausedTime += span
+      } else {
+        for (let k = i + 1; k < j; k++) time[k] = rawTime[k] - pausedTime
+      }
+      i = j
+    } else {
+      i++
+    }
+  }
+
+  return { time, rawTime, pausedTime }
 }
 
 /**

@@ -1243,11 +1243,8 @@ input[type='range']:disabled {
     height: 58px;
   }
 
-  .brand-text em {
-    display: none;
-  }
-
-  #theme-toggle {
+  /* 窄屏让出品牌文字给主题开关：功能优先，图标保留品牌身份 */
+  .brand-text {
     display: none;
   }
 

@@ -29,7 +29,7 @@ export interface Track {
 export interface TrackSeries {
   /** 累积距离，米 */
   dist: Float64Array
-  /** 相对起始时间，秒；无时间数据时全为 NaN */
+  /** 相对起始时间（秒，暂停段已压缩）；无时间数据时全为 NaN */
   time: Float64Array
   /** 原始海拔，米 */
   eleRaw: Float64Array
