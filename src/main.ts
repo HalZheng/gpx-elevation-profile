@@ -1,7 +1,7 @@
 import './styles.css'
 
 import echarts, { type EChartsInstance } from './chart/echarts'
-import { buildChartOption } from './chart/options'
+import { DESCENT_COLOR, buildChartOption } from './chart/options'
 import { visibleYDomain, type YDomain } from './chart/scale'
 import { readChartTheme, readableInk, rgba, shadeHex, type ChartTheme } from './chart/theme'
 import { computeDistance, computeElapsed, rollingGrade, rollingSpeed } from './gpx/geo'
@@ -16,6 +16,7 @@ import {
 } from './calibration/openmeteo'
 import { computeSummary } from './analysis/stats'
 import { DEFAULT_CLIMB_PARAMS, categoryLabel, climbColor, detectClimbs } from './analysis/climbs'
+import { DEFAULT_DESCENT_PARAMS, detectDescents } from './analysis/descents'
 import { DEFAULT_BAND_PRESET, bandColorFor, normalizeBands, presetBands } from './analysis/bands'
 import { classifyByGrade, countSegments } from './analysis/segments'
 import { fetchPlaces, type PlaceFetchResult } from './places/overpass'
@@ -26,6 +27,8 @@ import type {
   AnnotateMode,
   Climb,
   ClimbParams,
+  Descent,
+  DescentParams,
   GradeBand,
   Place,
   PlaceLabel,
@@ -89,6 +92,13 @@ const el = {
   pMingainVal: $('p-mingain-val'),
   pMingrade: $<HTMLInputElement>('p-mingrade'),
   pMingradeVal: $('p-mingrade-val'),
+  // 下坡极速
+  descentToggle: $<HTMLInputElement>('descent-toggle'),
+  descentMinlen: $<HTMLInputElement>('descent-minlen'),
+  descentMinlenVal: $('descent-minlen-val'),
+  descentCount: $<HTMLInputElement>('descent-count'),
+  descentCountVal: $('descent-count-val'),
+  lockDescent: $('lock-descent'),
   fGrade: $<HTMLInputElement>('f-grade'),
   fSpeed: $<HTMLInputElement>('f-speed'),
   fHr: $<HTMLInputElement>('f-hr'),
@@ -153,6 +163,12 @@ interface State {
 
   climbParams: ClimbParams
 
+  /** 下坡极速标注：是否在图上标注 */
+  descentsEnabled: boolean
+  descentParams: DescentParams
+  /** 最多标注几个下坡段的极速 */
+  descentMaxCount: number
+
   /** 沿线地名：是否显示 */
   placesEnabled: boolean
   /** 基础纳入半径，米 */
@@ -184,6 +200,7 @@ interface State {
   /** 当前着色段数，用于面板提示 */
   gradeSegmentCount: number
   climbs: Climb[]
+  descents: Descent[]
   summary: Summary | null
   y: YDomain
 }
@@ -213,6 +230,10 @@ const state: State = {
 
   climbParams: { ...DEFAULT_CLIMB_PARAMS },
 
+  descentsEnabled: true,
+  descentParams: { ...DEFAULT_DESCENT_PARAMS },
+  descentMaxCount: 3,
+
   placesEnabled: true,
   placeRadius: 800,
   placeSpacing: 2000,
@@ -234,6 +255,7 @@ const state: State = {
   gradeKeys: null,
   gradeSegmentCount: 0,
   climbs: [],
+  descents: [],
   summary: null,
   y: { min: 0, max: 100, interval: 20 },
 }
@@ -295,6 +317,8 @@ function loadTrack(track: Track): void {
   state.calDisplay = 'raw'
   state.zoom = { start: 0, end: 100 }
   state.minSegLength = defaultMinSegLength(dist[n - 1])
+  // 新轨迹默认开启下坡极速标注；无时间数据时 applyCapabilities 会再关掉
+  state.descentsEnabled = true
 
   // 换轨迹时同步复位校准面板与横轴尺度
   el.calMeta.textContent = ''
@@ -386,12 +410,17 @@ function rebuild(): void {
     cad: series.cad,
   })
   const climbs = detectClimbs(series.dist, activeEle, grade, series.time, state.climbParams)
+  // 下坡极速要有速度才有意义，没有时间数据的轨迹直接跳过识别
+  const descents = track.hasTime
+    ? detectDescents(series.dist, activeEle, grade, series.time, series.speed, state.descentParams)
+    : []
 
   state.eleRawSmooth = rawSmooth
   state.activeEle = activeEle
   state.grade = grade
   state.summary = summary
   state.climbs = climbs
+  state.descents = descents
   // 「按坡度」的逐点归类在这里算好：迟滞 + 过短段合并，避免图上出现几百个碎段
   state.gradeKeys =
     state.annotate === 'grade'
@@ -417,6 +446,22 @@ function computeY(): YDomain {
   return visibleYDomain(x, seriesArr, state.zoom.start, state.zoom.end)
 }
 
+/**
+ * 实际要标注的下坡段：先按极速从高到低取前 N 段，再按里程排序。
+ * 设数量上限是因为一条起伏路线可能识别出十几段下坡，全标上会糊成一片；
+ * 按极速取前几名，留下的才是真正值得看的。
+ */
+function activeDescents(): Descent[] {
+  if (!state.descentsEnabled) return []
+  const valid = state.descents.filter((d) => d.peakIdx >= 0 && isFinite(d.peakSpeed))
+  if (valid.length <= state.descentMaxCount) return valid
+  return valid
+    .slice()
+    .sort((a, b) => b.peakSpeed - a.peakSpeed)
+    .slice(0, state.descentMaxCount)
+    .sort((a, b) => a.peakDist - b.peakDist)
+}
+
 /* --------------------------------------------------------------- Chart */
 function ensureChart(): EChartsInstance {
   if (chart) return chart
@@ -424,9 +469,11 @@ function ensureChart(): EChartsInstance {
   chart.on('dataZoom', onDataZoom)
   chart.on('click', (params) => {
     const p = params as { componentType?: string; seriesName?: string; data?: { idx?: number } }
-    if (p.componentType !== 'series' || p.seriesName !== 'places') return
+    if (p.componentType !== 'series') return
+    // 地名与下坡极速都是「点一下放大到该处」
+    if (p.seriesName !== 'places' && p.seriesName !== 'descents') return
     const idx = p.data?.idx
-    if (typeof idx === 'number') zoomToPlace(idx)
+    if (typeof idx === 'number') zoomToIndex(idx)
   })
   chart.getZr().on('dblclick', () => resetZoom())
   if (typeof ResizeObserver !== 'undefined') {
@@ -454,6 +501,7 @@ function renderChart(full: boolean): void {
     annotate: state.annotate,
     bands: state.bands,
     climbs: state.climbs,
+    descents: activeDescents(),
     places: state.placeLabels,
     zoom: state.zoom,
     y,
@@ -554,6 +602,14 @@ function climbAt(idx: number): Climb | null {
   return null
 }
 
+/** 找到包含指定点的下坡段，用于悬浮气泡补充说明 */
+function descentAt(idx: number): Descent | null {
+  for (const descent of state.descents) {
+    if (idx >= descent.startIdx && idx <= descent.endIdx) return descent
+  }
+  return null
+}
+
 /**
  * 悬浮点附近的已标注地名。判定用**屏幕像素距离**而不是沿路径的距离：
  * 在 83 km 的尺度上 80 m 还不到一个像素，用户根本扫不到；
@@ -632,6 +688,14 @@ function tooltipHTML(idx: number): string {
       `<div class="ep-note">处于爬坡路段 · ${level} · 平均 ${climb.avgGrade.toFixed(1)}%</div>`,
     )
   }
+  const descent = descentAt(idx)
+  if (descent) {
+    const peak =
+      descent.peakIdx >= 0 ? ` · 段内极速 ${fmt.fmtSpeed(descent.peakSpeed)} km/h` : ''
+    notes.push(
+      `<div class="ep-note"><i class="ep-dot" style="display:inline-block;vertical-align:middle;background:${DESCENT_COLOR}"></i> 处于下坡路段 · 平均 ${descent.avgGrade.toFixed(1)}%${peak}</div>`,
+    )
+  }
   // 悬浮点落在某个已标注地名附近时补一行，顺带说明「离路线多远」
   const near = nearestPlaceLabel(idx)
   if (near) {
@@ -686,6 +750,8 @@ function renderMetrics(): void {
   if (state.calib && state.calDisplay !== 'raw') bits.push('已校准海拔')
   if (state.annotate === 'grade') bits.push('按坡度着色')
   else if (state.annotate === 'climb') bits.push('按爬坡等级着色')
+  const descents = activeDescents()
+  if (descents.length > 0) bits.push(`下坡极速 ${descents.length} 处`)
   el.chartSub.textContent = bits.join(' · ')
 }
 
@@ -931,6 +997,14 @@ function syncSegMinlenUI(): void {
   el.segMinlenVal.textContent = state.minSegLength === 0 ? '不合并' : `${state.minSegLength} m`
 }
 
+function syncDescentUI(): void {
+  el.descentToggle.checked = state.descentsEnabled
+  el.descentMinlen.value = String(state.descentParams.minLength)
+  el.descentMinlenVal.textContent = `${state.descentParams.minLength} m`
+  el.descentCount.value = String(state.descentMaxCount)
+  el.descentCountVal.textContent = String(state.descentMaxCount)
+}
+
 const ANNOTATE_HINTS: Record<AnnotateMode, string> = {
   off: '只画一条高亮折线与同色渐变填充，不做任何分段着色。',
   grade: '按坡度区间着色，填充同色。已做迟滞与过短段合并，呈现的是持续一段的坡度，不是逐点跳变。',
@@ -1134,8 +1208,8 @@ function nearestIndexByDist(dist: Float64Array, target: number): number {
   return lo
 }
 
-/** 点击地名：把横轴放大到该地名前后各一小段 */
-function zoomToPlace(idx: number): void {
+/** 点击图上的标注点（地名 / 下坡极速）：把横轴放大到该点前后各一小段 */
+function zoomToIndex(idx: number): void {
   const series = state.series
   if (!chart || !series) return
   const x = currentX()
@@ -1173,6 +1247,13 @@ function applyCapabilities(): void {
   setLock(el.fSpeed, el.lockSpeed, track.hasTime, 'speed')
   setLock(el.fHr, el.lockHr, track.hasHr, 'hr')
   setLock(el.fCad, el.lockCad, track.hasCad, 'cad')
+
+  // 下坡极速依赖速度（速度依赖时间），没有时间数据时整块禁用
+  const canSpeed = track.hasTime
+  el.descentToggle.disabled = !canSpeed
+  el.lockDescent.hidden = canSpeed
+  if (!canSpeed) state.descentsEnabled = false
+  el.descentToggle.checked = state.descentsEnabled
 }
 
 /* --------------------------------------------------------------- Misc */
@@ -1355,6 +1436,22 @@ function init(): void {
     debouncedRebuild()
   })
 
+  // 下坡极速：开关与数量只影响标注层，不必重算爬坡/统计，直接重画图表
+  el.descentToggle.addEventListener('change', () => {
+    state.descentsEnabled = el.descentToggle.checked
+    renderChart(true)
+  })
+  el.descentMinlen.addEventListener('input', () => {
+    state.descentParams.minLength = Number(el.descentMinlen.value)
+    el.descentMinlenVal.textContent = `${state.descentParams.minLength} m`
+    debouncedRebuild()
+  })
+  el.descentCount.addEventListener('input', () => {
+    state.descentMaxCount = Number(el.descentCount.value)
+    el.descentCountVal.textContent = String(state.descentMaxCount)
+    renderChart(true)
+  })
+
   // 沿线地名
   el.placesToggle.addEventListener('change', () => {
     state.placesEnabled = el.placesToggle.checked
@@ -1429,6 +1526,7 @@ function init(): void {
   renderBands()
   syncAnnotateUI()
   syncPlaceUI()
+  syncDescentUI()
 }
 
 function resetSettings(): void {
@@ -1444,6 +1542,9 @@ function resetSettings(): void {
     ? defaultMinSegLength(state.series.dist[state.series.dist.length - 1])
     : 200
   state.climbParams = { ...DEFAULT_CLIMB_PARAMS }
+  state.descentsEnabled = true
+  state.descentParams = { ...DEFAULT_DESCENT_PARAMS }
+  state.descentMaxCount = 3
   {
     const d = defaultPlaceParams(
       state.series ? state.series.dist[state.series.dist.length - 1] : 0,
@@ -1481,6 +1582,7 @@ function resetSettings(): void {
 
   renderBands()
   syncPlaceUI()
+  syncDescentUI()
   if (state.track) {
     applyCapabilities()
     el.calDisplayToggle.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
@@ -1503,4 +1605,7 @@ init()
   resetZoom,
   rebuild,
   updatePlaceLabels,
+  activeDescents,
+  detectDescents,
+  setThemeMode,
 }

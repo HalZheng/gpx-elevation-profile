@@ -1,8 +1,12 @@
-import type { AnnotateMode, Climb, GradeBand, PlaceLabel } from '../types'
+import type { AnnotateMode, Climb, Descent, GradeBand, PlaceLabel } from '../types'
 import { climbColor } from '../analysis/climbs'
 import { PLACE_COLOR } from '../places/meta'
+import * as fmt from '../format'
 import { hexToRgbString, rgba, type ChartTheme } from './theme'
 import type { YDomain } from './scale'
+
+/** 下坡极速标注的专属色：蓝（主线）与橙（爬坡）之外另起一色，避免与分级色混淆 */
+export const DESCENT_COLOR = '#12B0C8'
 
 export interface BuildInput {
   theme: ChartTheme
@@ -20,6 +24,8 @@ export interface BuildInput {
   bands: GradeBand[]
   /** annotate === 'climb' 时生效的爬坡路段 */
   climbs: Climb[]
+  /** 要标注极速的下坡段（已由调用方按数量上限筛选） */
+  descents: Descent[]
   /** 择优后的沿线地名标注 */
   places: PlaceLabel[]
   zoom: { start: number; end: number }
@@ -46,6 +52,7 @@ export function buildChartOption(input: BuildInput): Record<string, unknown> {
     bands,
     gradeKeys,
     climbs,
+    descents,
     places,
     zoom,
     y,
@@ -83,6 +90,10 @@ export function buildChartOption(input: BuildInput): Record<string, unknown> {
   // 地名标注画在最上层
   const placeLayer = placeSeries(places, x, ele, y, theme)
   if (placeLayer) series.push(placeLayer)
+
+  // 下坡极速标注再压一层：数量少、信息密度高，允许盖住地名
+  const descentLayer = descentSeries(descents, x, ele, y, theme)
+  if (descentLayer) series.push(descentLayer)
 
   return {
     animation: false,
@@ -303,8 +314,84 @@ function placeSeries(
   }
 }
 
-/* ------------------------------------------------------------ 坐标轴指针 */
+/* ---------------------------------------------------------- 下坡极速 */
 
+/**
+ * 下坡极速标注：在每段下坡的速度最高点落一个倒三角，标签写极速与均坡。
+ *
+ * 与地名同样用散点系列（而不是 markPoint）——只有系列级 `labelLayout` 支持
+ * `hideOverlap`，多段下坡的标签挤在一起时能自动让位。标签默认浮在点上方，
+ * 海拔落在纵轴上部时翻到下方，否则会被网格顶边裁掉。
+ */
+function descentSeries(
+  descents: Descent[],
+  x: Float64Array,
+  ele: Float64Array,
+  y: YDomain,
+  theme: ChartTheme,
+): Series | null {
+  const marks = descents.filter((d) => d.peakIdx >= 0 && isFinite(d.peakSpeed))
+  if (marks.length === 0) return null
+
+  const span = Math.max(1e-6, y.max - y.min)
+  const surfaceRgb = hexToRgbString(theme.surface)
+  const descentRgb = hexToRgbString(DESCENT_COLOR)
+  const x0 = x[0]
+  const xSpan = x[x.length - 1] - x0 || 1
+
+  const data = marks.map((d) => {
+    const pointX = x[d.peakIdx]
+    const high = (ele[d.peakIdx] - y.min) / span > 0.72
+    // 贴着网格左右边缘的点，标签往网格内倒，否则会被裁掉一半
+    const t = (pointX - x0) / xSpan
+    const align = t < 0.06 ? 'left' : t > 0.94 ? 'right' : 'center'
+    return {
+      name: '下坡极速',
+      value: [pointX, ele[d.peakIdx]],
+      // 点击放大时用得上：dataIndex 与轨迹点索引不是一回事
+      idx: d.peakIdx,
+      itemStyle: {
+        color: DESCENT_COLOR,
+        borderColor: theme.surface,
+        borderWidth: 1.6,
+      },
+      label: {
+        position: high ? 'bottom' : 'top',
+        distance: 6,
+        align,
+        formatter: `{v|${fmt.fmtSpeed(d.peakSpeed)}}{u| km/h}\n{g|均坡 ${fmt.fmtSignedPct(d.avgGrade)}}`,
+        rich: {
+          v: { color: theme.text, fontSize: 12, fontWeight: 700, lineHeight: 15 },
+          u: { color: theme.muted, fontSize: 9, fontWeight: 600, lineHeight: 15 },
+          g: { color: DESCENT_COLOR, fontSize: 10, fontWeight: 700, lineHeight: 13 },
+        },
+        padding: [3, 6],
+        borderRadius: 5,
+        // 胶囊底：下坡处背后常是渐变填充，不加底会看不清
+        backgroundColor: rgba(surfaceRgb, theme.isDark ? 0.78 : 0.88),
+        borderColor: rgba(descentRgb, 0.62),
+        borderWidth: 1,
+      },
+    }
+  })
+
+  return {
+    name: 'descents',
+    type: 'scatter',
+    data,
+    // 倒三角：一眼认出「这是下坡」
+    symbol: 'path://M1,1 L15,1 L8,15 Z',
+    symbolSize: 13,
+    z: 10,
+    animation: false,
+    label: { show: true },
+    labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
+    emphasis: { disabled: true },
+    tooltip: { show: false },
+  }
+}
+
+/* ------------------------------------------------------------ 坐标轴指针 */
 /**
  * 十字标尺气泡的统一外观。两套主题下都要满足「accent 底 + 高对比文字」：
  * 明亮模式的 accent 是深蓝（配白字），暗色模式是亮蓝（配近黑字）。

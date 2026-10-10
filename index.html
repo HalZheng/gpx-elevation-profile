@@ -298,6 +298,47 @@
                   </div>
                 </details>
 
+                <!-- 下坡极速 -->
+                <details class="sect" open>
+                  <summary>下坡极速</summary>
+                  <div class="sect-body">
+                    <p class="hint">
+                      识别连续下坡路段，在每段速度最高处标注极速与均坡。下坡的判定与爬坡对称：持续下降的连续区段，可跨越短暂平路。
+                    </p>
+                    <label class="switch-row">
+                      <input type="checkbox" id="descent-toggle" checked />
+                      <span class="switch"></span>
+                      <span
+                        >在图上标注下坡极速<span class="lock" id="lock-descent" hidden
+                          >无时间数据</span
+                        ></span
+                      >
+                    </label>
+                    <div class="field">
+                      <label for="descent-minlen"
+                        >最小下坡长度 <b id="descent-minlen-val">400 m</b></label
+                      >
+                      <input
+                        type="range"
+                        id="descent-minlen"
+                        min="200"
+                        max="3000"
+                        step="100"
+                        value="400"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="descent-count"
+                        >最多标注数 <b id="descent-count-val">3</b></label
+                      >
+                      <input type="range" id="descent-count" min="1" max="8" step="1" value="3" />
+                    </div>
+                    <p class="hint">
+                      一段起伏路可能识别出十几段下坡，因此按极速从高到低只标前几名；点标注可放大到该位置。
+                    </p>
+                  </div>
+                </details>
+
                 <!-- 沿线地名 -->
                 <details class="sect">
                   <summary>沿线地名<span class="tag">OpenStreetMap</span></summary>

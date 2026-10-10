@@ -102,6 +102,52 @@ export interface Climb {
   duration: number
 }
 
+export interface DescentParams {
+  /** 判定为「在下坡」的坡度上限 %（负值，如 -1.5；比它更陡才算下坡） */
+  maxGrade: number
+  /** 最小下坡长度 m */
+  minLength: number
+  /** 最小累计下降 m */
+  minDrop: number
+  /** 合并两段下坡的最大间隔距离 m */
+  bridgeGap: number
+  /** 合并时允许的最大中途爬升 m */
+  bridgeRise: number
+}
+
+/**
+ * 一段被识别出的下坡，以及该段内的极速点。
+ * 坡度类字段一律保留负号（下坡为负），展示时按需要取绝对值。
+ */
+export interface Descent {
+  startIdx: number
+  endIdx: number
+  /** 起止累积距离 m */
+  startDist: number
+  endDist: number
+  /** 长度 m */
+  length: number
+  /** 累计下降 m（正值） */
+  drop: number
+  /** 净下降 m（正值） */
+  netDrop: number
+  /** 平均坡度 %（负值） */
+  avgGrade: number
+  /** 最陡处坡度 %（负值，绝对值最大者） */
+  maxGrade: number
+  /** 起始时间（秒，相对起点），无时间数据为 NaN */
+  startTime: number
+  duration: number
+  /** 段内速度最高点的轨迹点索引；该段没有有效速度时为 -1 */
+  peakIdx: number
+  /** 极速点速度 m/s（无有效速度时为 NaN） */
+  peakSpeed: number
+  /** 极速点里程 m */
+  peakDist: number
+  /** 极速点相对时间 s */
+  peakTime: number
+}
+
 export interface Summary {
   distance: number
   gain: number
